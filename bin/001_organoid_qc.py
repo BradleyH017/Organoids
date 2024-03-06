@@ -146,6 +146,9 @@ def main():
     # Find the maximum category based on these sum values
     adata.obs['sum_category__machine'] = adata.obs['sum_'+cats].idxmax(axis=1) 
 
+    # Add the max probability of these summed categories
+    adata.obs['sum_category__machine_probability'] = adata.obs['sum_'+cats].max(axis=1)
+
     # Also add the organoid metadata
     meta = pd.read_csv("data/sample_to_individual_mapping.txt", sep = " ")
     meta = meta.assign(donor_vcf_ids=meta['donor_vcf_ids'].str.split(',')).explode('donor_vcf_ids')
@@ -185,13 +188,17 @@ def main():
         os.makedirs(qc_path)
 
     # Filter cells 
-    print(adata.obs)
     sc.pp.filter_cells(adata, min_genes=100) # Same as the biopsies
 
     # Plot the distribution of probabilities across categories
-    cats = np.unique(adata.obs['category'])
+    if category_col == "sum_category__machine":
+        probability_col = "sum_category__machine_probability"
+    else:
+        probability_col = "predicted_celltype_probability"
+
+    cats = np.unique(adata.obs[category_col])
     for c in cats:
-        data = adata.obs[adata.obs.category == c].predicted_celltype_probability
+        data = adata.obs[adata.obs[category_col] == c][probability_col]
         sns.distplot(data, hist=False, rug=True, label=c)
 
     plt.legend()
@@ -202,7 +209,7 @@ def main():
     plt.clf()
 
     # Subset for cells with probability
-    adata = adata[adata.obs['predicted_celltype_probability'] > filter_keras_probability]
+    adata = adata[adata.obs[probability_col] > filter_keras_probability]
 
     # Interesting that there are cells strongly annotated for non-epithelial cells. 
     # Plot the proportion of categories per sample
@@ -215,7 +222,7 @@ def main():
         use = adata.obs[adata.obs.experiment_id == s]
         cells_sample_proportions.loc[cells_sample_proportions.index == s, 'Total'] = use.shape[0]
         for c in cats:
-            prop = use[use.category == c].shape[0]/use.shape[0]
+            prop = use[use[category_col] == c].shape[0]/use.shape[0]
             cells_sample_proportions.loc[cells_sample_proportions.index == s, c] = prop
 
     cells_sample_proportions = cells_sample_proportions.drop('Total', axis=1)
@@ -272,8 +279,11 @@ def main():
         plt.clf()
 
     # Filter for cells annotated as epithelial cells if desirved, using the desired specification of category
-    if filt_epi_only:
-        epithelial_cats = ["Enterocyte", "Secretory", "Stem cells"]
+    if filt_epi_only == "yes":
+        epithelial_cats = ["Enterocyte", "Secretory", "Stem_cells"]
+        if category_col == "sum_category__machine":
+            epithelial_cats = ['sum_' + element for element in epithelial_cats]
+        
         adata = adata[adata.obs[category_col].isin(epithelial_cats)]
 
 
@@ -347,7 +357,7 @@ def main():
     other_filters = ["pct_counts_gene_group__mito_transcript", "log1p_n_genes_by_counts", "log1p_total_counts"]
     for f in other_filters:
         for c in cats:
-            data = adata.obs.loc[adata.obs.category == c,f]
+            data = adata.obs.loc[adata.obs[category_col] == c,f]
             sns.distplot(data, hist=False, rug=True, label=c)
         plt.legend()
         plt.xlabel(f)
@@ -416,7 +426,7 @@ def main():
     sc.settings.figdir=pca_path
 
     # Plot PCA
-    colby=["disease_status", "experiment_id", "category__machine", "predicted_celltype", "predicted_celltype_probability", "pct_counts_gene_group__mito_transcript", "log1p_n_genes_by_counts", "log1p_total_counts", "sum_category__machine"]
+    colby=["disease_status", "experiment_id", "category__machine", category_col, "predicted_celltype", "predicted_celltype_probability", "pct_counts_gene_group__mito_transcript", "log1p_n_genes_by_counts", "log1p_total_counts", "sum_category__machine"]
     for c in colby:
         sc.pl.pca(adata, color=c, save="_" + c + ".png")
 
@@ -468,7 +478,7 @@ def main():
     np.setdiff1d(mhc1_genes, adata.var['gene_symbols'])
 
     # For each category, plot a violin plot of these genes across IFNg treatment
-    cats = np.unique(adata.obs['category__machine'])
+    cats = np.unique(adata.obs[category_col])
 
     violin_path = pca_path="results/violin"
     if not os.path.exists(violin_path):
@@ -477,7 +487,7 @@ def main():
     sc.settings.figdir=violin_path
     for c in cats:
         print(f"~~~~~~ {c} ~~~~~~")
-        temp = adata[adata.obs['category__machine'] == c]
+        temp = adata[adata.obs[category_col] == c]
         for g in mhc1_genes:
             print(g)
             ens = adata.var[adata.var['gene_symbols'] == g].index[0]
